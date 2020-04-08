@@ -9,10 +9,6 @@
 #include "third_party/skia/include/core/SkPictureRecorder.h"
 #include "third_party/skia/include/utils/SkNWayCanvas.h"
 
-#if defined(OS_FUCHSIA)
-#include <lib/ui/scenic/cpp/resources.h>
-#endif
-
 namespace flutter {
 
 LayerTree::LayerTree(const SkISize& frame_size,
@@ -25,16 +21,22 @@ LayerTree::LayerTree(const SkISize& frame_size,
       checkerboard_raster_cache_images_(false),
       checkerboard_offscreen_layers_(false) {}
 
-LayerTree::~LayerTree() = default;
-
-void LayerTree::RecordBuildTime(fml::TimePoint start) {
-  build_start_ = start;
+void LayerTree::RecordBuildTime(fml::TimePoint build_start,
+                                fml::TimePoint target_time) {
+  build_start_ = build_start;
+  target_time_ = target_time;
   build_finish_ = fml::TimePoint::Now();
 }
 
-void LayerTree::Preroll(CompositorContext::ScopedFrame& frame,
+bool LayerTree::Preroll(CompositorContext::ScopedFrame& frame,
                         bool ignore_raster_cache) {
   TRACE_EVENT0("flutter", "LayerTree::Preroll");
+
+  if (!root_layer_) {
+    FML_LOG(ERROR) << "The scene did not specify any layers.";
+    return false;
+  }
+
   SkColorSpace* color_space =
       frame.canvas() ? frame.canvas()->imageInfo().colorSpace() : nullptr;
   frame.context().raster_cache().SetCheckboardCacheImages(
@@ -47,6 +49,7 @@ void LayerTree::Preroll(CompositorContext::ScopedFrame& frame,
       stack,
       color_space,
       kGiantRect,
+      false,
       frame.context().raster_time(),
       frame.context().ui_time(),
       frame.context().texture_registry(),
@@ -55,11 +58,53 @@ void LayerTree::Preroll(CompositorContext::ScopedFrame& frame,
       frame_device_pixel_ratio_};
 
   root_layer_->Preroll(&context, frame.root_surface_transformation());
+  return context.surface_needs_readback;
 }
+
+#if defined(OS_FUCHSIA)
+void LayerTree::UpdateScene(SceneUpdateContext& context,
+                            scenic::ContainerNode& container) {
+  TRACE_EVENT0("flutter", "LayerTree::UpdateScene");
+
+  // Ensure the context is aware of the view metrics.
+  context.set_dimensions(frame_size_, frame_physical_depth_,
+                         frame_device_pixel_ratio_);
+
+  const auto& metrics = context.metrics();
+  FML_DCHECK(metrics->scale_x > 0.0f);
+  FML_DCHECK(metrics->scale_y > 0.0f);
+  FML_DCHECK(metrics->scale_z > 0.0f);
+
+  SceneUpdateContext::Transform transform(context,                  // context
+                                          1.0f / metrics->scale_x,  // X
+                                          1.0f / metrics->scale_y,  // Y
+                                          1.0f / metrics->scale_z   // Z
+  );
+
+  SceneUpdateContext::Frame frame(
+      context,
+      SkRRect::MakeRect(
+          SkRect::MakeWH(frame_size_.width(), frame_size_.height())),
+      SK_ColorTRANSPARENT, SK_AlphaOPAQUE, "flutter::LayerTree");
+  if (root_layer_->needs_system_composite()) {
+    root_layer_->UpdateScene(context);
+  }
+  if (root_layer_->needs_painting()) {
+    frame.AddPaintLayer(root_layer_.get());
+  }
+  container.AddChild(transform.entity_node());
+}
+#endif
 
 void LayerTree::Paint(CompositorContext::ScopedFrame& frame,
                       bool ignore_raster_cache) const {
   TRACE_EVENT0("flutter", "LayerTree::Paint");
+
+  if (!root_layer_) {
+    FML_LOG(ERROR) << "The scene did not specify any layers to paint.";
+    return;
+  }
+
   SkISize canvas_size = frame.canvas()->getBaseLayerSize();
   SkNWayCanvas internal_nodes_canvas(canvas_size.width(), canvas_size.height());
   internal_nodes_canvas.addCanvas(frame.canvas());
@@ -111,6 +156,7 @@ sk_sp<SkPicture> LayerTree::Flatten(const SkRect& bounds) {
       unused_stack,              // mutator stack
       nullptr,                   // SkColorSpace* dst_color_space
       kGiantRect,                // SkRect cull_rect
+      false,                     // layer reads from surface
       unused_stopwatch,          // frame time (dont care)
       unused_stopwatch,          // engine time (dont care)
       unused_texture_registry,   // texture registry (not supported)
@@ -148,40 +194,6 @@ sk_sp<SkPicture> LayerTree::Flatten(const SkRect& bounds) {
   }
 
   return recorder.finishRecordingAsPicture();
-}
-
-void LayerTree::UpdateScene(SceneUpdateContext& context,
-                            scenic::ContainerNode& container) {
-#if defined(OS_FUCHSIA)
-  TRACE_EVENT0("flutter", "LayerTree::UpdateScene");
-
-  // Ensure the context is aware of the view metrics.
-  context.set_frame_dimensions(frame_size_, frame_physical_depth_,
-                               frame_device_pixel_ratio_);
-
-  const auto& metrics = context.metrics();
-  FML_DCHECK(metrics->scale_x > 0.0f);
-  FML_DCHECK(metrics->scale_y > 0.0f);
-  FML_DCHECK(metrics->scale_z > 0.0f);
-
-  SceneUpdateContext::Transform transform(context,                  // context
-                                          1.0f / metrics->scale_x,  // X
-                                          1.0f / metrics->scale_y,  // Y
-                                          1.0f / metrics->scale_z   // Z
-  );
-  SceneUpdateContext::Frame frame(
-      context,
-      SkRRect::MakeRect(
-          SkRect::MakeWH(frame_size_.width(), frame_size_.height())),
-      SK_ColorTRANSPARENT, /* opacity */ 1.0f, /* elevation */ 0.0f);
-  if (root_layer_->needs_system_composite()) {
-    root_layer_->UpdateScene(context);
-  }
-  if (root_layer_->needs_painting()) {
-    frame.AddPaintLayer(root_layer_.get());
-  }
-  container.AddChild(transform.entity_node());
-#endif
 }
 
 }  // namespace flutter

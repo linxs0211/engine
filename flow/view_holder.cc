@@ -4,9 +4,7 @@
 
 #include "flutter/flow/view_holder.h"
 
-#include "flutter/flow/embedded_views.h"
 #include "flutter/fml/thread_local.h"
-#include "lib/ui/scenic/cpp/resources.h"
 
 namespace {
 
@@ -53,9 +51,9 @@ namespace flutter {
 void ViewHolder::Create(zx_koid_t id,
                         fml::RefPtr<fml::TaskRunner> ui_task_runner,
                         fuchsia::ui::views::ViewHolderToken view_holder_token,
-                        BindCallback on_bind_callback) {
-  // This GPU thread contains at least 1 ViewHolder.  Initialize the per-thread
-  // bindings.
+                        const BindCallback& on_bind_callback) {
+  // This raster thread contains at least 1 ViewHolder.  Initialize the
+  // per-thread bindings.
   if (tls_view_holder_bindings.get() == nullptr) {
     tls_view_holder_bindings.reset(new ViewHolderBindings());
   }
@@ -66,7 +64,7 @@ void ViewHolder::Create(zx_koid_t id,
 
   auto view_holder = std::make_unique<ViewHolder>(std::move(ui_task_runner),
                                                   std::move(view_holder_token),
-                                                  std::move(on_bind_callback));
+                                                  on_bind_callback);
   bindings->emplace(id, std::move(view_holder));
 }
 
@@ -93,10 +91,10 @@ ViewHolder* ViewHolder::FromId(zx_koid_t id) {
 
 ViewHolder::ViewHolder(fml::RefPtr<fml::TaskRunner> ui_task_runner,
                        fuchsia::ui::views::ViewHolderToken view_holder_token,
-                       BindCallback on_bind_callback)
+                       const BindCallback& on_bind_callback)
     : ui_task_runner_(std::move(ui_task_runner)),
       pending_view_holder_token_(std::move(view_holder_token)),
-      pending_bind_callback_(std::move(on_bind_callback)) {
+      pending_bind_callback_(on_bind_callback) {
   FML_DCHECK(ui_task_runner_);
   FML_DCHECK(pending_view_holder_token_.value);
 }
@@ -104,13 +102,17 @@ ViewHolder::ViewHolder(fml::RefPtr<fml::TaskRunner> ui_task_runner,
 void ViewHolder::UpdateScene(SceneUpdateContext& context,
                              const SkPoint& offset,
                              const SkSize& size,
+                             SkAlpha opacity,
                              bool hit_testable) {
   if (pending_view_holder_token_.value) {
     entity_node_ = std::make_unique<scenic::EntityNode>(context.session());
+    opacity_node_ =
+        std::make_unique<scenic::OpacityNodeHACK>(context.session());
     view_holder_ = std::make_unique<scenic::ViewHolder>(
         context.session(), std::move(pending_view_holder_token_),
         "Flutter SceneHost");
-
+    opacity_node_->AddChild(*entity_node_);
+    opacity_node_->SetLabel("flutter::ViewHolder");
     entity_node_->Attach(*view_holder_);
     ui_task_runner_->PostTask(
         [bind_callback = std::move(pending_bind_callback_),
@@ -119,9 +121,11 @@ void ViewHolder::UpdateScene(SceneUpdateContext& context,
         });
   }
   FML_DCHECK(entity_node_);
+  FML_DCHECK(opacity_node_);
   FML_DCHECK(view_holder_);
 
-  context.top_entity()->embedder_node().AddChild(*entity_node_);
+  context.top_entity()->embedder_node().AddChild(*opacity_node_);
+  opacity_node_->SetOpacity(opacity / 255.0f);
   entity_node_->SetTranslation(offset.x(), offset.y(), -0.1f);
   entity_node_->SetHitTestBehavior(
       hit_testable ? fuchsia::ui::gfx::HitTestBehavior::kDefault

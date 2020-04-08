@@ -3,7 +3,11 @@
 # found in the LICENSE file.
 
 import("//build/fuchsia/sdk.gni")
+import("//flutter/build/dart/rules.gni")
+import("//flutter/lib/ui/dart_ui.gni")
 import("//third_party/dart/sdk/lib/_http/http_sources.gni")
+import(
+    "//third_party/dart/sdk/lib/_internal/js_runtime/interceptors_sources.gni")
 import("//third_party/dart/sdk/lib/async/async_sources.gni")
 import("//third_party/dart/sdk/lib/collection/collection_sources.gni")
 import("//third_party/dart/sdk/lib/convert/convert_sources.gni")
@@ -19,8 +23,6 @@ import("//third_party/dart/sdk/lib/js_util/js_util_sources.gni")
 import("//third_party/dart/sdk/lib/math/math_sources.gni")
 import("//third_party/dart/sdk/lib/typed_data/typed_data_sources.gni")
 import("//third_party/dart/sdk/lib/wasm/wasm_sources.gni")
-import("$flutter_root/build/dart/rules.gni")
-import("$flutter_root/lib/ui/dart_ui.gni")
 
 if (!is_fuchsia) {
   copy("copy_sky_engine_authors") {
@@ -81,6 +83,14 @@ copy("_http") {
   sources = rebase_path(http_sdk_sources, "", lib_path)
   outputs = [
     "$root_gen_dir/dart-pkg/sky_engine/lib/_http/{{source_file_part}}",
+  ]
+}
+
+copy("_interceptors") {
+  lib_path = rebase_path("_internal/js_runtime", "", dart_sdk_lib_path)
+  sources = rebase_path(interceptors_sdk_sources, "", lib_path)
+  outputs = [
+    "$root_gen_dir/dart-pkg/sky_engine/lib/_interceptors/{{source_file_part}}",
   ]
 }
 
@@ -175,6 +185,7 @@ copy("copy_dart_ui") {
 group("copy_dart_sdk") {
   deps = [
     ":_http",
+    ":_interceptors",
     ":async",
     ":collection",
     ":convert",
@@ -211,31 +222,10 @@ dart_pkg("sky_engine") {
     deps += [ ":copy_sky_engine_authors" ]
   }
 
-  service_isolate_dir = "//third_party/dart/runtime/bin/vmservice"
+  service_isolate_dir = "//third_party/dart/sdk/lib/_internal/vm/bin/"
   sdk_ext_directory = "$root_gen_dir/sky/bindings"
   sdk_ext_files = [
     "$service_isolate_dir/vmservice_io.dart",
-    "$service_isolate_dir/loader.dart",
-    "$service_isolate_dir/server.dart",
+    "$service_isolate_dir/vmservice_server.dart",
   ]
-}
-
-if (is_fuchsia && !using_fuchsia_sdk) {
-  import("//build/dart/dart_library.gni")
-
-  dart_library("sky_engine_dart") {
-    package_name = "sky_engine"
-
-    package_root = "$root_gen_dir/dart-pkg/sky_engine"
-
-    sources = []
-
-    disable_analysis = true
-
-    non_dart_deps = [
-      # This will ensure all the source files needed for this package are
-      # copied to the right location.
-      ":sky_engine",
-    ]
-  }
 }

@@ -7,9 +7,16 @@
 #include "flutter/flow/paint_utils.h"
 #include "third_party/skia/include/core/SkColorFilter.h"
 
-namespace {
+namespace flutter {
 
-uint64_t NextUniqueID() {
+Layer::Layer()
+    : paint_bounds_(SkRect::MakeEmpty()),
+      unique_id_(NextUniqueID()),
+      needs_system_composite_(false) {}
+
+Layer::~Layer() = default;
+
+uint64_t Layer::NextUniqueID() {
   static std::atomic<uint64_t> nextID(1);
   uint64_t id;
   do {
@@ -18,15 +25,39 @@ uint64_t NextUniqueID() {
   return id;
 }
 
-}  // anonymous namespace
+void Layer::Preroll(PrerollContext* context, const SkMatrix& matrix) {}
 
-namespace flutter {
+Layer::AutoPrerollSaveLayerState::AutoPrerollSaveLayerState(
+    PrerollContext* preroll_context,
+    bool save_layer_is_active,
+    bool layer_itself_performs_readback)
+    : preroll_context_(preroll_context),
+      save_layer_is_active_(save_layer_is_active),
+      layer_itself_performs_readback_(layer_itself_performs_readback) {
+  if (save_layer_is_active_) {
+    prev_surface_needs_readback_ = preroll_context_->surface_needs_readback;
+    preroll_context_->surface_needs_readback = false;
+  }
+}
 
-Layer::Layer()
-    : parent_(nullptr),
-      paint_bounds_(SkRect::MakeEmpty()),
-      unique_id_(NextUniqueID()),
-      needs_system_composite_(false) {}
+Layer::AutoPrerollSaveLayerState Layer::AutoPrerollSaveLayerState::Create(
+    PrerollContext* preroll_context,
+    bool save_layer_is_active,
+    bool layer_itself_performs_readback) {
+  return Layer::AutoPrerollSaveLayerState(preroll_context, save_layer_is_active,
+                                          layer_itself_performs_readback);
+}
+
+Layer::AutoPrerollSaveLayerState::~AutoPrerollSaveLayerState() {
+  if (save_layer_is_active_) {
+    preroll_context_->surface_needs_readback =
+        (prev_surface_needs_readback_ || layer_itself_performs_readback_);
+  }
+}
+
+#if defined(OS_FUCHSIA)
+void Layer::UpdateScene(SceneUpdateContext& context) {}
+#endif  // defined(OS_FUCHSIA)
 
 Layer::AutoSaveLayer::AutoSaveLayer(const PaintContext& paint_context,
                                     const SkRect& bounds,

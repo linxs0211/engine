@@ -11,8 +11,8 @@ namespace flutter {
 
 // Don't add an OpacityLayer with no children to the layer tree. Painting an
 // OpacityLayer is very costly due to the saveLayer call. If there's no child,
-// having the OpacityLayer or not has the same effect. In debug_unopt build, the
-// |EnsureSingleChild| will assert if there are no children.
+// having the OpacityLayer or not has the same effect. In debug_unopt build,
+// |Preroll| will assert if there are no children.
 class OpacityLayer : public ContainerLayer {
  public:
   // An offset is provided here because OpacityLayer.addToScene method in the
@@ -25,16 +25,24 @@ class OpacityLayer : public ContainerLayer {
   // the retained rendering inefficient as a small offset change could propagate
   // to many leaf layers. Therefore we try to capture that offset here to stop
   // the propagation as repainting the OpacityLayer is expensive.
-  OpacityLayer(int alpha, const SkPoint& offset);
-  ~OpacityLayer() override = default;
+  OpacityLayer(SkAlpha alpha, const SkPoint& offset);
+
+  void Add(std::shared_ptr<Layer> layer) override;
 
   void Preroll(PrerollContext* context, const SkMatrix& matrix) override;
+
   void Paint(PaintContext& context) const override;
+
+#if defined(OS_FUCHSIA)
   void UpdateScene(SceneUpdateContext& context) override;
+#endif  // defined(OS_FUCHSIA)
 
  private:
-  int alpha_;
+  ContainerLayer* GetChildContainer() const;
+
+  SkAlpha alpha_;
   SkPoint offset_;
+  SkRRect frameRRect_;
 
   FML_DISALLOW_COPY_AND_ASSIGN(OpacityLayer);
 };
